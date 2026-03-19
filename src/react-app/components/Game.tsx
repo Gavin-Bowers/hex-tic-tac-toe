@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import HexGrid from './HexGrid'
 import type { Player, CellState } from '../../shared/types'
+import { checkWin } from '../../shared/gameLogic'
 
 interface GameState {
   id: string
@@ -78,6 +79,57 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
   }, [gameState, myPlayer])
 
   const handleMove = useCallback(async (col: number, row: number) => {
+    if (!gameState) return
+
+    const key = `${col},${row}`
+
+    // Check if cell is already occupied
+    if (gameState.cells[key] && gameState.cells[key] !== 'empty') return
+
+    // Optimistic update - apply move locally immediately
+    const newCells = { ...gameState.cells, [key]: myPlayer }
+
+    // Check for win
+    const winCells = checkWin(newCells, myPlayer)
+
+    let optimisticState: GameState
+    if (winCells) {
+      optimisticState = {
+        ...gameState,
+        cells: newCells,
+        winner: myPlayer,
+        winningCells: winCells,
+        firstMoveKey: null,
+        movesThisTurn: 0,
+        updatedAt: Date.now(),
+      }
+    } else if (gameState.movesThisTurn === 0) {
+      // First move of turn
+      optimisticState = {
+        ...gameState,
+        cells: newCells,
+        firstMoveKey: key,
+        movesThisTurn: 1,
+        updatedAt: Date.now(),
+      }
+    } else {
+      // Second move - switch players
+      optimisticState = {
+        ...gameState,
+        cells: newCells,
+        firstMoveKey: null,
+        movesThisTurn: 0,
+        lastTurnMoves: { first: gameState.firstMoveKey!, second: key },
+        currentPlayer: gameState.currentPlayer === 'x' ? 'o' : 'x',
+        updatedAt: Date.now(),
+      }
+    }
+
+    // Apply optimistic update
+    setGameState(optimisticState)
+    lastUpdatedRef.current = optimisticState.updatedAt
+
+    // Send to server
     try {
       const res = await fetch(`/api/games/${gameId}/move`, {
         method: 'POST',
@@ -86,17 +138,38 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
       })
       if (!res.ok) {
         const data = await res.json()
+        // Revert optimistic update on error
+        lastUpdatedRef.current = 0
+        await fetchGameState()
         setError(data.error || 'Failed to make move')
         return
       }
-      // Immediately fetch updated state
-      await fetchGameState()
     } catch {
+      // Revert on network error
+      lastUpdatedRef.current = 0
+      await fetchGameState()
       setError('Failed to connect to server')
     }
-  }, [gameId, playerToken, fetchGameState])
+  }, [gameId, playerToken, gameState, myPlayer, fetchGameState])
 
   const handleUndoFirst = useCallback(async () => {
+    if (!gameState || !gameState.firstMoveKey) return
+
+    // Optimistic update
+    const newCells = { ...gameState.cells }
+    delete newCells[gameState.firstMoveKey]
+
+    const optimisticState: GameState = {
+      ...gameState,
+      cells: newCells,
+      firstMoveKey: null,
+      movesThisTurn: 0,
+      updatedAt: Date.now(),
+    }
+
+    setGameState(optimisticState)
+    lastUpdatedRef.current = optimisticState.updatedAt
+
     try {
       const res = await fetch(`/api/games/${gameId}/undo-first`, {
         method: 'POST',
@@ -105,16 +178,38 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
       })
       if (!res.ok) {
         const data = await res.json()
+        lastUpdatedRef.current = 0
+        await fetchGameState()
         setError(data.error || 'Failed to undo')
         return
       }
-      await fetchGameState()
     } catch {
+      lastUpdatedRef.current = 0
+      await fetchGameState()
       setError('Failed to connect to server')
     }
-  }, [gameId, playerToken, fetchGameState])
+  }, [gameId, playerToken, gameState, fetchGameState])
 
   const handleUndo = useCallback(async () => {
+    if (!gameState || !gameState.lastTurnMoves) return
+
+    // Optimistic update - remove second move, restore first move state
+    const newCells = { ...gameState.cells }
+    delete newCells[gameState.lastTurnMoves.second]
+
+    const optimisticState: GameState = {
+      ...gameState,
+      cells: newCells,
+      firstMoveKey: gameState.lastTurnMoves.first,
+      movesThisTurn: 1,
+      lastTurnMoves: null,
+      currentPlayer: gameState.currentPlayer === 'x' ? 'o' : 'x',
+      updatedAt: Date.now(),
+    }
+
+    setGameState(optimisticState)
+    lastUpdatedRef.current = optimisticState.updatedAt
+
     try {
       const res = await fetch(`/api/games/${gameId}/undo`, {
         method: 'POST',
@@ -123,14 +218,17 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
       })
       if (!res.ok) {
         const data = await res.json()
+        lastUpdatedRef.current = 0
+        await fetchGameState()
         setError(data.error || 'Failed to undo')
         return
       }
-      await fetchGameState()
     } catch {
+      lastUpdatedRef.current = 0
+      await fetchGameState()
       setError('Failed to connect to server')
     }
-  }, [gameId, playerToken, fetchGameState])
+  }, [gameId, playerToken, gameState, fetchGameState])
 
   const handleReset = useCallback(async () => {
     try {
