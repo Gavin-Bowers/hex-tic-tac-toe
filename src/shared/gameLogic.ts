@@ -1,7 +1,7 @@
 import type { CellState, Player, GameState } from './types'
 
 export const WIN_LENGTH = 6
-export const GRID_SIZE = 200
+export const GRID_SIZE = 100
 export const CENTER = Math.floor(GRID_SIZE / 2)
 
 // Hex directions for odd-r offset coordinates
@@ -79,6 +79,7 @@ export function createInitialGameState(gameId: string, creatorToken: string): Ga
     lastTurnMoves: null,
     winner: null,
     winningCells: [],
+    startingPlayer: 'x',
     players: {
       x: creatorToken,  // Creator plays as X
       o: null,          // Waiting for opponent

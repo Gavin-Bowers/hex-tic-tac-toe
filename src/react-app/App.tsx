@@ -44,6 +44,17 @@ function App() {
     window.location.hash = ''
   }
 
+  const handlePlayerChange = (newPlayer: Player) => {
+    if (session) {
+      const newSession = { ...session, player: newPlayer }
+      setSession(newSession)
+      sessionStorage.setItem(`game:${session.gameId}`, JSON.stringify({
+        playerToken: session.playerToken,
+        player: newPlayer
+      }))
+    }
+  }
+
   // Handle browser back/forward
   useEffect(() => {
     const handleHashChange = () => {
@@ -73,6 +84,7 @@ function App() {
         playerToken={session.playerToken}
         myPlayer={session.player}
         onLeave={handleLeaveGame}
+        onPlayerChange={handlePlayerChange}
       />
     )
   }

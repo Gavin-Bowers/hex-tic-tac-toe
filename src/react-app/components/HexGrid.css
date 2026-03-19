@@ -1,0 +1,146 @@
+.hex-ui {
+  font-family: 'Roboto', sans-serif;
+  color: white;
+}
+
+.hex-ui-box {
+  padding: 12px 20px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+}
+
+/* Top left - stacked panels */
+.left-panel {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.player-indicator {
+  display: flex;
+  align-items: center;
+}
+
+.turn-status {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.moves-count {
+  color: #888;
+  font-size: 14px;
+}
+
+/* Top center - center status (waiting/win/lose) */
+.center-status {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+}
+
+.status-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+
+.status-text.waiting {
+  color: #888;
+}
+
+.status-text.result {
+  font-weight: bold;
+  font-size: 20px;
+}
+
+.player-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.player-icon.x {
+  filter: brightness(0) saturate(100%) invert(59%) sepia(52%) saturate(1037%) hue-rotate(314deg) brightness(101%) contrast(101%);
+}
+
+.player-icon.o {
+  filter: brightness(0) saturate(100%) invert(76%) sepia(36%) saturate(487%) hue-rotate(121deg) brightness(92%) contrast(89%);
+}
+
+/* Top right - controls */
+.game-controls {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.control-label {
+  font-size: 14px;
+}
+
+.control-label.large {
+  font-size: 16px;
+}
+
+.game-id {
+  font-family: monospace;
+  font-size: 18px;
+  letter-spacing: 2px;
+}
+
+.icon-btn {
+  padding: 6px;
+  background: #4a4a6e;
+  border: none;
+  border-radius: 4px;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover {
+  background: #5a5a7e;
+}
+
+.icon-btn.danger {
+  background: #aa3333;
+}
+
+.icon-btn.danger:hover {
+  background: #bb4444;
+}
+
+.icon-btn.highlight {
+  background: #4ecdc4;
+  border: 2px solid #7fffef;
+  box-shadow: 0 0 10px #4ecdc4;
+}
+
+.icon-btn.highlight:hover {
+  background: #5eddd4;
+}
+
+.icon-btn .material-symbols-outlined {
+  font-size: 18px;
+}

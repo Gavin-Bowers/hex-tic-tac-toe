@@ -24,22 +24,29 @@ interface GameProps {
   playerToken: string
   myPlayer: Player
   onLeave: () => void
+  onPlayerChange: (player: Player) => void
 }
 
-export default function Game({ gameId, playerToken, myPlayer, onLeave }: GameProps) {
+export default function Game({ gameId, playerToken, myPlayer, onLeave, onPlayerChange }: GameProps) {
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const lastUpdatedRef = useRef<number>(0)
+  const pendingMoveRef = useRef<boolean>(false)
 
   const fetchGameState = useCallback(async () => {
     try {
-      const res = await fetch(`/api/games/${gameId}`)
+      const res = await fetch(`/api/games/${gameId}?token=${playerToken}`)
       if (!res.ok) {
         const data = await res.json()
         setError(data.error || 'Failed to fetch game')
         return
       }
-      const data: GameState = await res.json()
+      const data = await res.json()
+
+      // Check if our player assignment changed (e.g. after reset)
+      if (data.yourPlayer && data.yourPlayer !== myPlayer) {
+        onPlayerChange(data.yourPlayer)
+      }
 
       // Only update if the game state has changed
       if (data.updatedAt > lastUpdatedRef.current) {
@@ -49,7 +56,7 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
     } catch {
       setError('Failed to connect to server')
     }
-  }, [gameId])
+  }, [gameId, playerToken, myPlayer, onPlayerChange])
 
   // Initial fetch
   useEffect(() => {
@@ -62,29 +69,20 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
     return () => clearInterval(interval)
   }, [fetchGameState])
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      if (e.key === 'Backspace' && gameState) {
-        e.preventDefault()
-        // Only undo if it's not our turn (we just finished our turn)
-        const previousPlayer = gameState.currentPlayer === 'x' ? 'o' : 'x'
-        if (previousPlayer === myPlayer && gameState.movesThisTurn === 0 && gameState.lastTurnMoves) {
-          await handleUndo()
-        }
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [gameState, myPlayer])
-
   const handleMove = useCallback(async (col: number, row: number) => {
     if (!gameState) return
+
+    // Block if a move is already in flight
+    if (pendingMoveRef.current) return
+    pendingMoveRef.current = true
 
     const key = `${col},${row}`
 
     // Check if cell is already occupied
-    if (gameState.cells[key] && gameState.cells[key] !== 'empty') return
+    if (gameState.cells[key] && gameState.cells[key] !== 'empty') {
+      pendingMoveRef.current = false
+      return
+    }
 
     // Optimistic update - apply move locally immediately
     const newCells = { ...gameState.cells, [key]: myPlayer }
@@ -142,18 +140,21 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
         lastUpdatedRef.current = 0
         await fetchGameState()
         setError(data.error || 'Failed to make move')
-        return
       }
     } catch {
       // Revert on network error
       lastUpdatedRef.current = 0
       await fetchGameState()
       setError('Failed to connect to server')
+    } finally {
+      pendingMoveRef.current = false
     }
   }, [gameId, playerToken, gameState, myPlayer, fetchGameState])
 
   const handleUndoFirst = useCallback(async () => {
     if (!gameState || !gameState.firstMoveKey) return
+    if (pendingMoveRef.current) return
+    pendingMoveRef.current = true
 
     // Optimistic update
     const newCells = { ...gameState.cells }
@@ -181,17 +182,20 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
         lastUpdatedRef.current = 0
         await fetchGameState()
         setError(data.error || 'Failed to undo')
-        return
       }
     } catch {
       lastUpdatedRef.current = 0
       await fetchGameState()
       setError('Failed to connect to server')
+    } finally {
+      pendingMoveRef.current = false
     }
   }, [gameId, playerToken, gameState, fetchGameState])
 
   const handleUndo = useCallback(async () => {
     if (!gameState || !gameState.lastTurnMoves) return
+    if (pendingMoveRef.current) return
+    pendingMoveRef.current = true
 
     // Optimistic update - remove second move, restore first move state
     const newCells = { ...gameState.cells }
@@ -221,14 +225,35 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
         lastUpdatedRef.current = 0
         await fetchGameState()
         setError(data.error || 'Failed to undo')
-        return
       }
     } catch {
       lastUpdatedRef.current = 0
       await fetchGameState()
       setError('Failed to connect to server')
+    } finally {
+      pendingMoveRef.current = false
     }
   }, [gameId, playerToken, gameState, fetchGameState])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.key === 'Backspace' && gameState && !gameState.winner) {
+        e.preventDefault()
+        const isMyTurn = gameState.currentPlayer === myPlayer
+        const canUndoFirst = isMyTurn && gameState.movesThisTurn === 1 && !!gameState.firstMoveKey
+        const canUndoSecond = !isMyTurn && gameState.movesThisTurn === 0 && !!gameState.lastTurnMoves
+
+        if (canUndoFirst) {
+          await handleUndoFirst()
+        } else if (canUndoSecond) {
+          await handleUndo()
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [gameState, myPlayer, handleUndoFirst, handleUndo])
 
   const handleReset = useCallback(async () => {
     try {
@@ -242,12 +267,16 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
         setError(data.error || 'Failed to reset')
         return
       }
+      const data = await res.json()
+      if (data.player) {
+        onPlayerChange(data.player)
+      }
       lastUpdatedRef.current = 0  // Force refresh
       await fetchGameState()
     } catch {
       setError('Failed to connect to server')
     }
-  }, [gameId, playerToken, fetchGameState])
+  }, [gameId, playerToken, fetchGameState, onPlayerChange])
 
   const handleLeave = useCallback(async () => {
     try {
@@ -310,24 +339,40 @@ export default function Game({ gameId, playerToken, myPlayer, onLeave }: GamePro
   }
 
   const isMyTurn = gameState.currentPlayer === myPlayer
-  const waitingForOpponent = !gameState.players.o
+  const opponentPlayer = myPlayer === 'x' ? 'o' : 'x'
+  const opponentPresent = !!gameState.players[opponentPlayer]
+
+  // Check if opponent was ever in the game (board has more than just the initial move)
+  const gameHasStarted = Object.keys(gameState.cells).length > 1
+  const waitingForOpponent = !opponentPresent && !gameHasStarted
+  const opponentLeft = !opponentPresent && gameHasStarted
+
+  // Can undo first move if it's my turn and I've made one move
+  const canUndoFirst = isMyTurn && gameState.movesThisTurn === 1 && !!gameState.firstMoveKey
+
+  // Can undo second move if it's not my turn (I just finished) and opponent hasn't moved yet
+  const canUndoSecond = !isMyTurn && gameState.movesThisTurn === 0 && !!gameState.lastTurnMoves
 
   return (
     <HexGrid
       gameId={gameId}
       cells={gameState.cells}
-      currentPlayer={gameState.currentPlayer}
       movesThisTurn={gameState.movesThisTurn}
       firstMoveKey={gameState.firstMoveKey}
+      lastTurnMoves={gameState.lastTurnMoves}
       winner={gameState.winner}
       winningCells={gameState.winningCells}
       myPlayer={myPlayer}
       isMyTurn={isMyTurn}
+      canUndoFirst={canUndoFirst}
+      canUndoSecond={canUndoSecond}
       onMove={handleMove}
       onUndoFirst={handleUndoFirst}
+      onUndoSecond={handleUndo}
       onReset={handleReset}
       onLeave={handleLeave}
       waitingForOpponent={waitingForOpponent}
+      opponentLeft={opponentLeft}
     />
   )
 }

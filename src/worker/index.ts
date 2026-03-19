@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { GameState, CreateGameResponse, JoinGameResponse, MoveRequest, UndoRequest } from "../shared/types";
-import { createInitialGameState, applyMove, applyUndo, applyUndoFirstMove, generateId, generateToken } from "../shared/gameLogic";
+import { createInitialGameState, applyMove, applyUndo, applyUndoFirstMove, generateId, generateToken, GRID_SIZE } from "../shared/gameLogic";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -28,6 +28,7 @@ app.post("/api/games", async (c) => {
 // Get game state
 app.get("/api/games/:id", async (c) => {
   const gameId = c.req.param("id");
+  const token = c.req.query("token");
   const gameData = await c.env.GAMES.get(`game:${gameId}`);
 
   if (!gameData) {
@@ -36,6 +37,13 @@ app.get("/api/games/:id", async (c) => {
 
   const game: GameState = JSON.parse(gameData);
 
+  // Determine which player this token belongs to (if provided)
+  let yourPlayer: 'x' | 'o' | null = null;
+  if (token) {
+    if (game.players.x === token) yourPlayer = 'x';
+    else if (game.players.o === token) yourPlayer = 'o';
+  }
+
   // Don't expose player tokens in the response
   const publicGame = {
     ...game,
@@ -43,6 +51,7 @@ app.get("/api/games/:id", async (c) => {
       x: game.players.x ? true : false,
       o: game.players.o ? true : false,
     },
+    yourPlayer,  // Include which player the requester is
   };
 
   return c.json(publicGame);
@@ -59,19 +68,25 @@ app.post("/api/games/:id/join", async (c) => {
 
   const game: GameState = JSON.parse(gameData);
 
-  if (game.players.o) {
+  // Check which slot is available
+  let assignedPlayer: 'x' | 'o';
+  if (!game.players.x) {
+    assignedPlayer = 'x';
+  } else if (!game.players.o) {
+    assignedPlayer = 'o';
+  } else {
     return c.json({ error: "Game is full" }, 400);
   }
 
   const playerToken = generateToken();
-  game.players.o = playerToken;
+  game.players[assignedPlayer] = playerToken;
   game.updatedAt = Date.now();
 
   await c.env.GAMES.put(`game:${gameId}`, JSON.stringify(game));
 
   const response: JoinGameResponse = {
     playerToken,
-    player: 'o',
+    player: assignedPlayer,
   };
 
   return c.json(response);
@@ -167,8 +182,9 @@ app.post("/api/games/:id/reset", async (c) => {
     return c.json({ error: "Invalid player token" }, 400);
   }
 
-  // Reset the game state but keep players
-  const centerKey = `${Math.floor(200 / 2)},${Math.floor(200 / 2)}`;
+  // Reset the game state, swap player assignments (X becomes O, O becomes X)
+  // X always starts on the board, O always takes the first turn
+  const centerKey = `${Math.floor(GRID_SIZE / 2)},${Math.floor(GRID_SIZE / 2)}`;
   const resetGame: GameState = {
     ...game,
     cells: { [centerKey]: 'x' },
@@ -178,15 +194,21 @@ app.post("/api/games/:id/reset", async (c) => {
     lastTurnMoves: null,
     winner: null,
     winningCells: [],
+    players: {
+      x: game.players.o,  // Swap: whoever was O is now X
+      o: game.players.x,  // Swap: whoever was X is now O
+    },
     updatedAt: Date.now(),
   };
 
   await c.env.GAMES.put(`game:${gameId}`, JSON.stringify(resetGame));
 
-  return c.json({ success: true });
+  // Return the new player assignment for the requester
+  const newPlayer = resetGame.players.x === body.playerToken ? 'x' : 'o';
+  return c.json({ success: true, player: newPlayer });
 });
 
-// Leave/close game
+// Leave game - free up the slot so another player can join
 app.post("/api/games/:id/leave", async (c) => {
   const gameId = c.req.param("id");
   const body = await c.req.json<UndoRequest>();
@@ -200,20 +222,28 @@ app.post("/api/games/:id/leave", async (c) => {
   const game: GameState = JSON.parse(gameData);
 
   // Verify player is in the game
-  if (game.players.x !== body.playerToken && game.players.o !== body.playerToken) {
+  const isPlayerX = game.players.x === body.playerToken;
+  const isPlayerO = game.players.o === body.playerToken;
+  if (!isPlayerX && !isPlayerO) {
     return c.json({ error: "Invalid player token" }, 400);
   }
 
-  // Mark game as closed and delete after a short delay (so other player can see)
-  const closedGame: GameState = {
+  // Free up the player slot
+  const updatedGame: GameState = {
     ...game,
-    winner: 'closed' as any,  // Special marker
+    players: {
+      x: isPlayerX ? null : game.players.x,
+      o: isPlayerO ? null : game.players.o,
+    },
     updatedAt: Date.now(),
   };
 
-  await c.env.GAMES.put(`game:${gameId}`, JSON.stringify(closedGame), {
-    expirationTtl: 60,  // Delete after 60 seconds
-  });
+  // If both players have left, delete the game
+  if (!updatedGame.players.x && !updatedGame.players.o) {
+    await c.env.GAMES.delete(`game:${gameId}`);
+  } else {
+    await c.env.GAMES.put(`game:${gameId}`, JSON.stringify(updatedGame));
+  }
 
   return c.json({ success: true });
 });

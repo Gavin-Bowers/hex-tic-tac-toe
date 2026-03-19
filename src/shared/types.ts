@@ -10,6 +10,7 @@ export interface GameState {
   lastTurnMoves: { first: string; second: string } | null
   winner: Player | 'closed' | null  // 'closed' means opponent left
   winningCells: string[]  // Serialized from Set
+  startingPlayer: Player  // Who started this game (alternates on reset)
   players: {
     x: string | null  // Player token
     o: string | null  // Player token

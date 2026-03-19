@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react'
-import { Stage, Layer, Line, Image } from 'react-konva'
+import { Stage, Layer, Line, Image, Shape } from 'react-konva'
 import { defineHex, Grid, rectangle, Hex } from 'honeycomb-grid'
 import useImage from 'use-image'
 import type Konva from 'konva'
@@ -8,6 +8,7 @@ import xSvgUrl from '../assets/x.svg'
 import oSvgUrl from '../assets/o.svg'
 import type { CellState, Player } from '../../shared/types'
 import { GRID_SIZE } from '../../shared/gameLogic'
+import './HexGrid.css'
 
 const HEX_SIZE = 30
 const CENTER = Math.floor(GRID_SIZE / 2)
@@ -36,35 +37,43 @@ interface HexData {
 interface HexGridProps {
   gameId: string
   cells: Record<string, CellState>
-  currentPlayer: Player
   movesThisTurn: number
   firstMoveKey: string | null
+  lastTurnMoves: { first: string; second: string } | null
   winner: Player | 'closed' | null
   winningCells: string[]
   myPlayer: Player | null
   isMyTurn: boolean
+  canUndoFirst: boolean
+  canUndoSecond: boolean
   onMove: (col: number, row: number) => void
   onUndoFirst: () => void
+  onUndoSecond: () => void
   onReset: () => void
   onLeave: () => void
   waitingForOpponent: boolean
+  opponentLeft: boolean
 }
 
 function HexGrid({
   gameId,
   cells,
-  currentPlayer,
   movesThisTurn,
   firstMoveKey,
+  lastTurnMoves,
   winner,
   winningCells,
   myPlayer,
   isMyTurn,
+  canUndoFirst,
+  canUndoSecond,
   onMove,
   onUndoFirst,
+  onUndoSecond,
   onReset,
   onLeave,
   waitingForOpponent,
+  opponentLeft,
 }: HexGridProps) {
   const [stagePos, setStagePos] = useState<{ x: number; y: number } | null>(null)
   const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight })
@@ -73,6 +82,15 @@ function HexGrid({
   const lastUpdateRef = useRef<number>(0)
 
   const winningCellsSet = useMemo(() => new Set(winningCells), [winningCells])
+  const recentMovesSet = useMemo(() => {
+    const set = new Set<string>()
+    if (firstMoveKey) set.add(firstMoveKey)
+    if (lastTurnMoves) {
+      set.add(lastTurnMoves.first)
+      set.add(lastTurnMoves.second)
+    }
+    return set
+  }, [firstMoveKey, lastTurnMoves])
 
   const grid = useMemo(() => {
     return new Grid(MyHex, rectangle({ width: GRID_SIZE, height: GRID_SIZE }))
@@ -128,6 +146,58 @@ function HexGrid({
     }
     return result
   }, [hexDataMap, stagePos, dimensions])
+
+  // Map of all occupied cells for efficient lookup
+  const occupiedCells = useMemo(() => {
+    const map = new Map<string, { centerX: number; centerY: number; state: 'x' | 'o' }>()
+    for (const [key, state] of Object.entries(cells)) {
+      if (state === 'x' || state === 'o') {
+        const hexData = hexDataMap.get(key)
+        if (hexData) {
+          map.set(key, { centerX: hexData.centerX, centerY: hexData.centerY, state })
+        }
+      }
+    }
+    return map
+  }, [cells, hexDataMap])
+
+  // Calculate off-screen move indicators
+  const offScreenIndicators = useMemo(() => {
+    if (stagePos === null) return []
+
+    const INDICATOR_SIZE = 16
+    const PADDING = INDICATOR_SIZE / 2 + 2 // Keep indicator fully visible
+    const indicators: { x: number; y: number; angle: number; state: 'x' | 'o' }[] = []
+
+    for (const [, cell] of occupiedCells) {
+      // Convert world position to screen position
+      const screenX = cell.centerX + stagePos.x
+      const screenY = cell.centerY + stagePos.y
+
+      // Check if off screen (with buffer so partly visible cells don't show indicators)
+      const EDGE_BUFFER = 40
+      const isOffScreen = screenX < -EDGE_BUFFER || screenX > dimensions.width + EDGE_BUFFER ||
+                          screenY < -EDGE_BUFFER || screenY > dimensions.height + EDGE_BUFFER
+
+      if (isOffScreen) {
+        // Clamp to screen edge with minimal padding
+        const clampedX = Math.max(PADDING, Math.min(dimensions.width - PADDING, screenX))
+        const clampedY = Math.max(PADDING, Math.min(dimensions.height - PADDING, screenY))
+
+        // Calculate angle pointing towards the off-screen cell
+        const angle = Math.atan2(screenY - clampedY, screenX - clampedX) * (180 / Math.PI)
+
+        indicators.push({
+          x: clampedX,
+          y: clampedY,
+          angle,
+          state: cell.state
+        })
+      }
+    }
+
+    return indicators
+  }, [occupiedCells, stagePos, dimensions])
 
   useEffect(() => {
     const handleResize = () => {
@@ -189,16 +259,18 @@ function HexGrid({
   }, [stagePos])
 
   const handleLeftClick = useCallback((col: number, row: number) => {
-    if (!isMyTurn || winner || waitingForOpponent) return
+    if (!isMyTurn || winner || waitingForOpponent || opponentLeft) return
     onMove(col, row)
-  }, [isMyTurn, winner, waitingForOpponent, onMove])
+  }, [isMyTurn, winner, waitingForOpponent, opponentLeft, onMove])
 
-  const handleRightClick = useCallback((col: number, row: number) => {
-    if (!isMyTurn || winner) return
-    if (movesThisTurn === 1 && firstMoveKey === `${col},${row}`) {
+  const handleRightClick = useCallback(() => {
+    if (winner) return
+    if (canUndoFirst) {
       onUndoFirst()
+    } else if (canUndoSecond) {
+      onUndoSecond()
     }
-  }, [isMyTurn, winner, movesThisTurn, firstMoveKey, onUndoFirst])
+  }, [winner, canUndoFirst, canUndoSecond, onUndoFirst, onUndoSecond])
 
   if (stagePos === null) {
     return null
@@ -206,122 +278,85 @@ function HexGrid({
 
   return (
     <>
-      {/* Top left - game status */}
-      <div style={{
-        position: 'absolute',
-        top: 20,
-        left: 20,
-        padding: '12px 20px',
-        background: 'rgba(0, 0, 0, 0.7)',
-        borderRadius: 8,
-        color: 'white',
-        fontFamily: 'sans-serif',
-        fontSize: 18,
-        zIndex: 10,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10
-      }}>
-        {waitingForOpponent ? (
-          <span style={{ color: '#888' }}>Waiting for opponent...</span>
-        ) : winner === 'closed' ? (
-          <span style={{ color: '#888', fontSize: 20 }}>
-            Opponent left the game
+      {/* Top left - turn status and player indicator */}
+      <div className="hex-ui left-panel">
+        {/* Turn status - always shown */}
+        <div className="hex-ui-box turn-status">
+          <span className="status-text">
+            {isMyTurn ? "It's your turn" : "It's your opponent's turn"}
           </span>
-        ) : winner ? (
-          <span style={{
-            color: winner === 'x' ? '#ff6b6b' : '#4ecdc4',
-            fontWeight: 'bold',
-            fontSize: 24
-          }}>
-            {winner.toUpperCase()} WINS!
-            {winner === myPlayer && ' (You!)'}
+          <span className="moves-count">
+            ({movesThisTurn}/2 moves)
           </span>
-        ) : (
-          <>
-            <span>Turn:</span>
-            <span style={{
-              color: currentPlayer === 'x' ? '#ff6b6b' : '#4ecdc4',
-              fontWeight: 'bold',
-              fontSize: 24
-            }}>
-              {currentPlayer.toUpperCase()}
-              {isMyTurn && ' (You)'}
-            </span>
-            <span style={{ color: '#888', fontSize: 14, marginLeft: 10 }}>
-              ({movesThisTurn}/2 moves)
-            </span>
-          </>
-        )}
+        </div>
+
+        {/* Player indicator - always shown */}
         {myPlayer && (
-          <span style={{
-            marginLeft: 20,
-            padding: '4px 8px',
-            background: myPlayer === 'x' ? '#ff6b6b33' : '#4ecdc433',
-            borderRadius: 4,
-            color: myPlayer === 'x' ? '#ff6b6b' : '#4ecdc4',
-            fontSize: 14,
-          }}>
-            You: {myPlayer.toUpperCase()}
-          </span>
+          <div className="hex-ui-box player-indicator">
+            <span className="status-text">
+              You're playing as
+              <img
+                src={myPlayer === 'x' ? xSvgUrl : oSvgUrl}
+                alt={myPlayer}
+                className={`player-icon ${myPlayer}`}
+              />
+            </span>
+          </div>
         )}
-        <button
-          onClick={onReset}
-          title="Reset game"
-          style={{
-            marginLeft: 20,
-            padding: '6px',
-            background: '#4a4a6e',
-            border: 'none',
-            borderRadius: 4,
-            color: 'white',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>
-            replay
-          </span>
-        </button>
       </div>
 
-      {/* Top right - game ID and leave button */}
-      <div style={{
-        position: 'absolute',
-        top: 20,
-        right: 20,
-        padding: '12px 20px',
-        background: 'rgba(0, 0, 0, 0.7)',
-        borderRadius: 8,
-        color: 'white',
-        fontFamily: 'sans-serif',
-        fontSize: 14,
-        zIndex: 10,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 15
-      }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-          <span style={{ color: '#888', fontSize: 12 }}>Game ID</span>
-          <span style={{ fontFamily: 'monospace', fontSize: 18, letterSpacing: 1 }}>{gameId}</span>
+      {/* Top center - waiting status or win/lose */}
+      {(waitingForOpponent || opponentLeft || (winner && winner !== 'closed')) && (
+        <div className="hex-ui hex-ui-box center-status">
+          {winner && winner !== 'closed' ? (
+            <span className="status-text result">
+              {winner === myPlayer ? 'You Win!' : 'You Lose'}
+            </span>
+          ) : (
+            <span className="status-text waiting">
+              {waitingForOpponent ? 'Waiting for a player to join' : 'Your opponent left'}
+            </span>
+          )}
         </div>
-        <button
-          onClick={onLeave}
-          title="Leave game"
-          style={{
-            padding: '8px 16px',
-            background: '#6b3a3a',
-            border: 'none',
-            borderRadius: 4,
-            color: 'white',
-            cursor: 'pointer',
-            fontSize: 14,
-          }}
-        >
-          Leave
-        </button>
+      )}
+
+      {/* Top right - game ID, new game, and leave button */}
+      <div className="hex-ui game-controls">
+        {/* Game ID row */}
+        <div className="hex-ui-box control-row">
+          <span className="game-id">{gameId}</span>
+          <button
+            onClick={() => navigator.clipboard.writeText(gameId)}
+            title="Copy game ID"
+            className={`icon-btn ${waitingForOpponent ? 'highlight' : ''}`}
+          >
+            <span className="material-symbols-outlined">content_copy</span>
+          </button>
+        </div>
+
+        {/* New Game row */}
+        <div className="hex-ui-box control-row">
+          <span className="control-label large">New Game</span>
+          <button
+            onClick={onReset}
+            title="New Game"
+            className={`icon-btn ${winner && winner !== 'closed' ? 'highlight' : ''}`}
+          >
+            <span className="material-symbols-outlined">restart_alt</span>
+          </button>
+        </div>
+
+        {/* Exit Lobby row */}
+        <div className="hex-ui-box control-row">
+          <span className="control-label large">Exit Lobby</span>
+          <button
+            onClick={onLeave}
+            title="Exit Lobby"
+            className="icon-btn danger"
+          >
+            <span className="material-symbols-outlined">exit_to_app</span>
+          </button>
+        </div>
       </div>
       <Stage
         ref={stageRef}
@@ -347,6 +382,7 @@ function HexGrid({
                 corners={corners}
                 state={state}
                 isWinningCell={winningCellsSet.has(key)}
+                isRecentMove={recentMovesSet.has(key)}
                 col={col}
                 row={row}
                 onLeftClick={handleLeftClick}
@@ -376,7 +412,7 @@ function HexGrid({
             )
           })}
         </Layer>
-        {winner && (
+        {winner && winner !== 'closed' && (
           <Layer>
             {visibleHexes
               .filter(({ col, row }) => winningCellsSet.has(`${col},${row}`))
@@ -396,6 +432,18 @@ function HexGrid({
               })}
           </Layer>
         )}
+        {/* Off-screen indicators layer - fixed to screen space */}
+        <Layer x={-stagePos.x} y={-stagePos.y} listening={false}>
+          {offScreenIndicators.map((indicator, i) => (
+            <OffScreenIndicator
+              key={`indicator-${i}`}
+              x={indicator.x}
+              y={indicator.y}
+              angle={indicator.angle}
+              color={indicator.state === 'x' ? '#ff6b6b' : '#4ecdc4'}
+            />
+          ))}
+        </Layer>
       </Stage>
     </>
   )
@@ -405,19 +453,22 @@ interface HexCellProps {
   corners: number[]
   state: CellState
   isWinningCell: boolean
+  isRecentMove: boolean
   col: number
   row: number
   onLeftClick: (col: number, row: number) => void
-  onRightClick: (col: number, row: number) => void
+  onRightClick: () => void
 }
 
-const HexCell = memo(function HexCell({ corners, state, isWinningCell, col, row, onLeftClick, onRightClick }: HexCellProps) {
+const HexCell = memo(function HexCell({ corners, state, isWinningCell, isRecentMove, col, row, onLeftClick, onRightClick }: HexCellProps) {
   const [hovered, setHovered] = useState(false)
 
   let fillColor = '#2a2a4e'
 
   if (isWinningCell) {
     fillColor = state === 'x' ? '#6b3a3a' : '#2a4a5a'
+  } else if (isRecentMove) {
+    fillColor = '#3a3a5e'
   } else if (hovered && state === 'empty') {
     fillColor = '#3a3a5e'
   }
@@ -427,7 +478,7 @@ const HexCell = memo(function HexCell({ corners, state, isWinningCell, col, row,
       onLeftClick(col, row)
     } else if (e.evt.button === 2) {
       e.evt.preventDefault()
-      onRightClick(col, row)
+      onRightClick()
     }
   }, [col, row, onLeftClick, onRightClick])
 
@@ -477,6 +528,40 @@ const CellIcon = memo(function CellIcon({ state, centerX, centerY, width, height
       width={iconSize}
       height={iconSize}
       opacity={isFirstMove ? 0.5 : 1}
+      listening={false}
+    />
+  )
+})
+
+interface OffScreenIndicatorProps {
+  x: number
+  y: number
+  angle: number
+  color: string
+}
+
+const OffScreenIndicator = memo(function OffScreenIndicator({ x, y, angle, color }: OffScreenIndicatorProps) {
+  const size = 16
+
+  return (
+    <Shape
+      x={x}
+      y={y}
+      rotation={angle + 90}
+      sceneFunc={(context, shape) => {
+        const h = size
+        const w = size * 0.8
+
+        context.beginPath()
+        context.moveTo(0, -h / 2)
+        context.lineTo(w / 2, h / 2)
+        context.lineTo(-w / 2, h / 2)
+        context.closePath()
+
+        context.fillStrokeShape(shape)
+      }}
+      fill={color}
+      opacity={0.8}
       listening={false}
     />
   )

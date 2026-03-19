@@ -60,7 +60,7 @@ export default function Lobby({ onJoinGame }: LobbyProps) {
       justifyContent: 'center',
       height: '100vh',
       color: 'white',
-      fontFamily: 'sans-serif',
+      fontFamily: "'Roboto', sans-serif",
       padding: 20,
     }}>
       <h1 style={{ fontSize: 48, marginBottom: 10 }}>Hex Tic-Tac-Toe</h1>
@@ -154,7 +154,7 @@ export default function Lobby({ onJoinGame }: LobbyProps) {
         color: '#666',
         fontSize: 14,
       }}>
-        Middle-click to pan | Right-click to undo first move | Backspace to undo second move
+        Middle-click to pan | Right-click or Backspace to undo
       </div>
     </div>
   )
