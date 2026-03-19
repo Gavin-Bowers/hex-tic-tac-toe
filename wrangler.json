@@ -11,5 +11,11 @@
 	"assets": {
 		"directory": "./dist/client",
 		"not_found_handling": "single-page-application"
-	}
+	},
+	"kv_namespaces": [
+		{
+			"binding": "GAMES",
+			"id": "bce0cdb3a1074884b6c4a9c4bc2a321f"
+		}
+	]
 }

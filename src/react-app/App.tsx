@@ -1,66 +1,83 @@
-// src/App.tsx
+import { useState, useEffect } from 'react'
+import Lobby from './components/Lobby'
+import Game from './components/Game'
+import type { Player } from '../shared/types'
+import './App.css'
 
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import viteLogo from "/vite.svg";
-import cloudflareLogo from "./assets/Cloudflare_Logo.svg";
-import honoLogo from "./assets/hono.svg";
-import "./App.css";
-
-function App() {
-	const [count, setCount] = useState(0);
-	const [name, setName] = useState("unknown");
-
-	return (
-		<>
-			<div>
-				<a href="https://vite.dev" target="_blank">
-					<img src={viteLogo} className="logo" alt="Vite logo" />
-				</a>
-				<a href="https://react.dev" target="_blank">
-					<img src={reactLogo} className="logo react" alt="React logo" />
-				</a>
-				<a href="https://hono.dev/" target="_blank">
-					<img src={honoLogo} className="logo cloudflare" alt="Hono logo" />
-				</a>
-				<a href="https://workers.cloudflare.com/" target="_blank">
-					<img
-						src={cloudflareLogo}
-						className="logo cloudflare"
-						alt="Cloudflare logo"
-					/>
-				</a>
-			</div>
-			<h1>Vite + React + Hono + Cloudflare</h1>
-			<div className="card">
-				<button
-					onClick={() => setCount((count) => count + 1)}
-					aria-label="increment"
-				>
-					count is {count}
-				</button>
-				<p>
-					Edit <code>src/App.tsx</code> and save to test HMR
-				</p>
-			</div>
-			<div className="card">
-				<button
-					onClick={() => {
-						fetch("/api/")
-							.then((res) => res.json() as Promise<{ name: string }>)
-							.then((data) => setName(data.name));
-					}}
-					aria-label="get name"
-				>
-					Name from API is: {name}
-				</button>
-				<p>
-					Edit <code>worker/index.ts</code> to change the name
-				</p>
-			</div>
-			<p className="read-the-docs">Click on the logos to learn more</p>
-		</>
-	);
+interface GameSession {
+  gameId: string
+  playerToken: string
+  player: Player
 }
 
-export default App;
+function App() {
+  const [session, setSession] = useState<GameSession | null>(() => {
+    // Restore session from URL hash if present
+    const hash = window.location.hash.slice(1)
+    if (hash) {
+      const stored = sessionStorage.getItem(`game:${hash}`)
+      if (stored) {
+        try {
+          const data = JSON.parse(stored)
+          return { gameId: hash, ...data }
+        } catch {
+          // Invalid stored data
+        }
+      }
+    }
+    return null
+  })
+
+  const handleJoinGame = (gameId: string, playerToken: string, player: Player) => {
+    const newSession = { gameId, playerToken, player }
+    setSession(newSession)
+    // Store in sessionStorage and update URL
+    sessionStorage.setItem(`game:${gameId}`, JSON.stringify({ playerToken, player }))
+    window.location.hash = gameId
+  }
+
+  const handleLeaveGame = () => {
+    if (session) {
+      sessionStorage.removeItem(`game:${session.gameId}`)
+    }
+    setSession(null)
+    window.location.hash = ''
+  }
+
+  // Handle browser back/forward
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.slice(1)
+      if (!hash) {
+        setSession(null)
+        return
+      }
+      const stored = sessionStorage.getItem(`game:${hash}`)
+      if (stored) {
+        try {
+          const data = JSON.parse(stored)
+          setSession({ gameId: hash, ...data })
+        } catch {
+          setSession(null)
+        }
+      }
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  if (session) {
+    return (
+      <Game
+        gameId={session.gameId}
+        playerToken={session.playerToken}
+        myPlayer={session.player}
+        onLeave={handleLeaveGame}
+      />
+    )
+  }
+
+  return <Lobby onJoinGame={handleJoinGame} />
+}
+
+export default App
